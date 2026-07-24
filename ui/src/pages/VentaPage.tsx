@@ -291,7 +291,7 @@ export default function VentaPage() {
             </div>
             {selectedBono && (
               <div className="hidden sm:flex bg-surface-container-high px-3 py-1 rounded-full text-secondary font-label-data text-label-data">
-                $ {Number(selectedBono.montoContado).toLocaleString('es-AR')} / $ {Number(selectedBono.montoCuota).toLocaleString('es-AR')}
+                $ {Number(selectedBono.montoContado).toLocaleString('es-AR')} / {selectedBono.cantidadCuotas} x $ {Number(selectedBono.montoCuota).toLocaleString('es-AR')}
               </div>
             )}
           </div>
@@ -359,7 +359,7 @@ export default function VentaPage() {
             <h2 className="font-headline-md text-headline-md text-on-surface">Datos del Comprador</h2>
           </div>
 
-          {!selectedNumero ? (
+          {selectedNumero === null ? (
             <div className="bg-surface-container-low rounded-2xl p-8 border border-outline-variant text-center">
               <span className="material-symbols-outlined text-outline-variant text-4xl mb-2 block">touch_app</span>
               <p className="text-body-sm text-secondary font-medium">Seleccioná un número para continuar</p>

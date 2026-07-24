@@ -3,6 +3,8 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { FirebaseGuard } from '../auth/guards/firebase.guard';
 import { VentasService } from './ventas.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
+import { CambiarTipoPagoDto } from './dto/cambiar-tipo-pago.dto';
+import { CambiarCompradorDto } from './dto/cambiar-comprador.dto';
 import { VentasFilterDto } from './dto/ventas-filter.dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 
@@ -24,6 +26,20 @@ export class VentasController {
   findAll(@Query() filter: VentasFilterDto, @Req() req) {
     const user = req.user;
     return this.ventasService.findAll(filter, user);
+  }
+
+  @Patch(':id/tipo-pago')
+  @Roles('admin', 'superadmin')
+  @ApiOperation({ summary: 'Cambiar tipo de pago de una venta' })
+  cambiarTipoPago(@Param('id') id: string, @Body() dto: CambiarTipoPagoDto) {
+    return this.ventasService.cambiarTipoPago(+id, dto);
+  }
+
+  @Patch(':id/comprador')
+  @Roles('admin', 'superadmin')
+  @ApiOperation({ summary: 'Cambiar nombre del comprador' })
+  cambiarComprador(@Param('id') id: string, @Body() dto: CambiarCompradorDto) {
+    return this.ventasService.cambiarComprador(+id, dto.compradorNombre);
   }
 
   @Patch(':id/verificar-pago')

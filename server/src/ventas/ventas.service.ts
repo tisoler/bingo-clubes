@@ -131,6 +131,62 @@ export class VentasService {
     return query.orderBy('venta.created_at', 'DESC').getMany();
   }
 
+  async cambiarTipoPago(id: number, dto: { tipoPago: string; cantidadCuotas?: number }): Promise<Venta> {
+    const venta = await this.ventaRepository.findOne({
+      where: { id },
+      relations: ['cuotas', 'bono'],
+    });
+    if (!venta) {
+      throw new BadRequestException('Venta no encontrada');
+    }
+
+    const nuevoTipo = dto.tipoPago;
+    const eraCuotas = venta.tipoPago === 'cuotas';
+
+    venta.tipoPago = nuevoTipo;
+    venta.pagoVerificado = false;
+
+    if (nuevoTipo === 'cuotas' && !eraCuotas) {
+      const cantidadCuotas = dto.cantidadCuotas || venta.bono?.cantidadCuotas || 6;
+      venta.cantidadCuotas = cantidadCuotas;
+      await this.ventaRepository.save(venta);
+
+      const cuotas = [];
+      for (let i = 1; i <= cantidadCuotas; i++) {
+        const mes = ((venta.bono!.mesInicial + i - 2) % 12) + 1;
+        cuotas.push(
+          this.cuotaRepository.create({
+            ventaId: id,
+            numeroCuota: i,
+            mes,
+            pagada: false,
+          }),
+        );
+      }
+      await this.cuotaRepository.save(cuotas);
+    } else if (eraCuotas && nuevoTipo !== 'cuotas') {
+      venta.cantidadCuotas = 0;
+      await this.ventaRepository.save(venta);
+      await this.cuotaRepository.delete({ ventaId: id });
+    } else {
+      await this.ventaRepository.save(venta);
+    }
+
+    return this.ventaRepository.findOne({
+      where: { id },
+      relations: ['cuotas', 'bono', 'club'],
+    });
+  }
+
+  async cambiarComprador(id: number, compradorNombre: string): Promise<Venta> {
+    const venta = await this.ventaRepository.findOneBy({ id });
+    if (!venta) {
+      throw new BadRequestException('Venta no encontrada');
+    }
+    venta.compradorNombre = compradorNombre;
+    return this.ventaRepository.save(venta);
+  }
+
   async verificarPago(id: number): Promise<Venta> {
     const venta = await this.ventaRepository.findOne({
       where: { id },

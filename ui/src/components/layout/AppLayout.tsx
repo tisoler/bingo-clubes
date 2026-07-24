@@ -32,7 +32,7 @@ export function AppLayout() {
     <div className="bg-background text-on-background font-body-base antialiased min-h-screen">
       {/* Top Navigation Bar */}
       <header className="bg-surface sticky top-0 z-50 border-b border-outline-variant flex items-center justify-between w-full h-20 sm:h-16 px-4 gap-1 sm:gap-2">
-        <h1 className="font-headline-md text-2xl font-bold text-primary mr-4">
+        <h1 className="font-headline-md text-lg md:text-xl lg:text-2xl font-bold text-primary mr-4">
           El bono de los clubes
         </h1>
 

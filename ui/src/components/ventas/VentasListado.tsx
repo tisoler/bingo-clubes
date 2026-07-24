@@ -57,6 +57,10 @@ interface VentasListadoProps {
   showVendedorCol?: boolean;
   showActividadCol?: boolean;
   canToggle?: boolean;
+  canEditTipoPago?: boolean;
+  canEditComprador?: boolean;
+  titleExtra?: React.ReactNode;
+  clubFilter?: number[];
 }
 
 export default function VentasListado({
@@ -69,6 +73,10 @@ export default function VentasListado({
   showVendedorCol = false,
   showActividadCol = false,
   canToggle = true,
+  canEditTipoPago = false,
+  canEditComprador = false,
+  titleExtra,
+  clubFilter,
 }: VentasListadoProps) {
   const [search, setSearch] = useState('');
   const [filtroTipoPago, setFiltroTipoPago] = useState('');
@@ -80,6 +88,10 @@ export default function VentasListado({
   const [page, setPage] = useState(1);
   const [bonos, setBonos] = useState<Bono[]>([]);
   const [selectedBono, setSelectedBono] = useState<Bono | null>(null);
+  const [editingTipoPagoId, setEditingTipoPagoId] = useState<number | null>(null);
+  const [editingCompradorId, setEditingCompradorId] = useState<number | null>(null);
+  const [editNombre, setEditNombre] = useState('');
+  const [editApellido, setEditApellido] = useState('');
 
   const totalCols = 8 + (showSuperadminClubCol ? 1 : 0) + (showActividadCol ? 1 : 0);
 
@@ -140,6 +152,44 @@ export default function VentasListado({
     }
   };
 
+  const handleCambiarTipoPago = async (venta: Venta, tipoPago: string) => {
+    setUpdatingRows(prev => ({ ...prev, [venta.id]: true }));
+    setEditingTipoPagoId(null);
+    try {
+      const res = await api.patch(`/ventas/${venta.id}/tipo-pago`, {
+        tipoPago,
+        cantidadCuotas: venta.bono?.cantidadCuotas,
+      });
+      setVentas(prev => prev.map(v => v.id === venta.id ? res.data : v));
+    } catch (err) {
+      console.error('Error al cambiar tipo de pago:', err);
+    } finally {
+      setUpdatingRows(prev => ({ ...prev, [venta.id]: false }));
+    }
+  };
+
+  const handleCambiarComprador = async (venta: Venta) => {
+    const fullName = `${editNombre}${editApellido ? ' ' + editApellido : ''}`;
+    if (!fullName.trim()) return;
+    setUpdatingRows(prev => ({ ...prev, [venta.id]: true }));
+    setEditingCompradorId(null);
+    try {
+      const res = await api.patch(`/ventas/${venta.id}/comprador`, { compradorNombre: fullName.trim() });
+      setVentas(prev => prev.map(v => v.id === venta.id ? res.data : v));
+    } catch (err) {
+      console.error('Error al cambiar comprador:', err);
+    } finally {
+      setUpdatingRows(prev => ({ ...prev, [venta.id]: false }));
+    }
+  };
+
+  const startEditComprador = (venta: Venta) => {
+    const parts = venta.compradorNombre.split(' ');
+    setEditNombre(parts[0] || '');
+    setEditApellido(parts.slice(1).join(' '));
+    setEditingCompradorId(venta.id);
+  };
+
   const getClubNombre = (clubId: number) => {
     return clubes.find(c => c.id === clubId)?.nombre || `Club #${clubId}`;
   };
@@ -172,19 +222,26 @@ export default function VentasListado({
     if (page > totalPages) setPage(1);
   }, [totalPages, page]);
 
+  const ventasForStats = useMemo(
+    () => clubFilter && clubFilter.length > 0
+      ? ventas.filter(v => clubFilter.includes(v.clubId))
+      : ventas,
+    [ventas, clubFilter]
+  );
+
   const totalVendido = useMemo(
-    () => ventas.reduce((sum, v) => {
+    () => ventasForStats.reduce((sum, v) => {
       if (v.tipoPago !== 'cuotas') return sum + getMontoTotal(v);
       if (v.tipoPago === 'cuotas' && v.bono) {
         return sum + v.bono.cantidadCuotas * v.bono.montoCuota;
       }
       return sum;
     }, 0),
-    [ventas]
+    [ventasForStats]
   );
 
   const totalRecaudado = useMemo(
-    () => ventas.reduce((sum, v) => {
+    () => ventasForStats.reduce((sum, v) => {
       if (v.tipoPago !== 'cuotas' && v.pagoVerificado) return sum + getMontoTotal(v);
       if (v.tipoPago === 'cuotas' && v.cuotas) {
         const montoCuota = getCuotaMonto(v);
@@ -192,11 +249,11 @@ export default function VentasListado({
       }
       return sum;
     }, 0),
-    [ventas]
+    [ventasForStats]
   );
 
   const totalPendiente = useMemo(
-    () => ventas.reduce((sum, v) => {
+    () => ventasForStats.reduce((sum, v) => {
       if (v.tipoPago !== 'cuotas' && !v.pagoVerificado) return sum + getMontoTotal(v);
       if (v.tipoPago === 'cuotas' && v.cuotas && v.bono) {
         const montoCuota = getCuotaMonto(v);
@@ -205,7 +262,7 @@ export default function VentasListado({
       }
       return sum;
     }, 0),
-    [ventas]
+    [ventasForStats]
   );
 
   const clearFilters = () => {
@@ -219,6 +276,53 @@ export default function VentasListado({
 
   const hasActiveFilters = search || filtroTipoPago || filtroVerificado || filtroClub || filtroActividad;
 
+  const exportCSV = () => {
+    const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const rows: string[][] = [];
+    const headers = ['Fecha', 'Boleta', 'Comprador'];
+    if (showVendedorCol) headers.push('Vendedor');
+    headers.push('Tipo Pago');
+    if (showActividadCol) headers.push('Actividad');
+    headers.push('Cuotas Pagadas', 'Total Cuotas', 'Monto Cuota', 'Monto Total', 'Verificado');
+    if (showSuperadminClubCol) headers.push('Club');
+    rows.push(headers);
+
+    ventasFiltradas.forEach(v => {
+      const isCuotas = v.tipoPago === 'cuotas';
+      const cuotasPagadas = v.cuotas?.filter(c => c.pagada).length ?? 0;
+      const totalCuotas = v.bono?.cantidadCuotas ?? 0;
+      const montoCuota = Number(v.bono?.montoCuota ?? 0);
+      const montoTotal = getMontoTotal(v);
+
+      const row: string[] = [
+        formatDate(v.createdAt),
+        formatPair(v.numero),
+        v.compradorNombre,
+      ];
+      if (showVendedorCol) row.push(v.vendedorNombre || '—');
+      row.push(isCuotas ? `${totalCuotas} Cuotas` : v.tipoPago === 'contado' ? 'Contado' : 'Transferencia');
+      if (showActividadCol) row.push(v.actividad || '—');
+      row.push(
+        String(cuotasPagadas),
+        String(totalCuotas),
+        `$${montoCuota.toLocaleString('es-AR')}`,
+        `$${montoTotal.toLocaleString('es-AR')}`,
+        getVerificado(v) ? 'Sí' : 'No',
+      );
+      if (showSuperadminClubCol) row.push(getClubNombre(v.clubId));
+      rows.push(row.map(esc));
+    });
+
+    const csv = rows.map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ventas_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -229,169 +333,273 @@ export default function VentasListado({
 
   return (
     <div className="space-y-6">
-      {/* Title */}
-      <div className="flex items-center gap-3">
-        <span className="material-symbols-outlined text-2xl text-primary">receipt_long</span>
-        <h2 className="font-headline-lg text-headline-lg text-primary">{title}</h2>
+      {/* Title + Summary Stats (grouped with border) */}
+      <div className="border border-outline-variant rounded-xl p-4 md:p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="material-symbols-outlined text-2xl text-primary">receipt_long</span>
+            <h2 className="font-headline-lg text-headline-lg text-primary">{title}</h2>
+          </div>
+          {titleExtra && (
+            <div className="flex items-center gap-2 sm:shrink-0">
+              {titleExtra}
+            </div>
+          )}
+        </div>
+
+        <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-surface border border-outline-variant p-5 md:p-6 rounded-xl flex items-center justify-between group hover:border-primary transition-colors">
+            <div>
+              <p className="text-on-surface-variant text-body-sm font-semibold">Total Bonos Vendidos</p>
+              <h3 className="font-headline-lg text-headline-lg text-primary mt-1">
+                {ventasForStats.length.toLocaleString('es-AR')}
+              </h3>
+              <p className="text-[#1a5e1a] text-xs font-bold flex items-center gap-1 mt-2">
+                <span className="material-symbols-outlined text-sm">trending_up</span>
+                Vendidos
+              </p>
+            </div>
+            <div className="w-15 h-18 flex items-center justify-center bg-primary-container/10 rounded-xl text-primary group-hover:bg-primary group-hover:text-on-primary transition-all">
+              <span style={{ fontSize: '2.1rem' }} className="material-symbols-outlined font-bold">shopping_cart</span>
+            </div>
+          </div>
+
+          <div className="bg-surface border border-outline-variant p-5 md:p-6 rounded-xl flex items-center justify-between group hover:border-primary transition-colors">
+            <div>
+              <p className="text-on-surface-variant text-body-sm font-semibold">Total Vendido</p>
+              <h3 className="font-headline-lg text-headline-lg text-primary mt-1 font-bold">
+                ${totalVendido.toLocaleString('es-AR')}
+              </h3>
+              <p className="text-primary text-xs font-bold flex items-center gap-1 mt-2">
+                <span className="material-symbols-outlined text-sm">payments</span>
+                Vendido
+              </p>
+            </div>
+            <div className="w-15 h-18 flex items-center justify-center bg-primary/20 rounded-xl text-primary group-hover:bg-secondary group-hover:text-on-secondary transition-all flex items-center">
+              <span style={{ fontSize: '2.1rem' }} className="material-symbols-outlined font-bold">sell</span>
+            </div>
+          </div>
+
+          <div className="bg-surface border border-outline-variant p-5 md:p-6 rounded-xl flex items-center justify-between group hover:border-primary transition-colors">
+            <div>
+              <p className="text-on-surface-variant text-body-sm font-semibold">Total Recaudado</p>
+              <h3 className="font-headline-lg text-headline-lg text-[#1a5e1a] mt-1 font-bold">
+                ${totalRecaudado.toLocaleString('es-AR')}
+              </h3>
+              {totalRecaudado > 0 && (
+                <div className="w-full bg-surface-variant h-1.5 rounded-full mt-3">
+                  <div
+                    className="bg-[#1a5e1a] h-1.5 rounded-full transition-all"
+                    style={{ width: `${(totalRecaudado / totalVendido) * 100}%` }}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="w-15 h-18 flex items-center justify-center bg-[#1a5e1a]/20 rounded-xl text-[#1a5e1a] group-hover:bg-[#1a5e1a] group-hover:text-on-secondary transition-all flex items-center">
+              <span style={{ fontSize: '2.1rem' }} className="material-symbols-outlined font-bold">account_balance</span>
+            </div>
+          </div>
+
+          <div className="bg-surface border border-outline-variant p-5 md:p-6 rounded-xl flex items-center justify-between group hover:border-primary transition-colors">
+            <div>
+              <p className="text-on-surface-variant text-body-sm font-bold">Pendiente de Cobro</p>
+              <h3 className="font-headline-lg text-headline-lg text-[#93000a] mt-1 font-bold">
+                ${totalPendiente.toLocaleString('es-AR')}
+              </h3>
+              {totalRecaudado + totalPendiente > 0 && (
+                <div className="w-full bg-surface-variant h-1.5 rounded-full mt-3">
+                  <div
+                    className="bg-[#93000a] h-1.5 rounded-full transition-all"
+                    style={{ width: `${(totalPendiente / (totalRecaudado + totalPendiente)) * 100}%` }}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="w-15 h-18 flex items-center justify-center bg-error-container/30 rounded-xl text-error group-hover:bg-error group-hover:text-on-error transition-all flex items-center">
+              <span style={{ fontSize: '2.1rem' }} className="material-symbols-outlined font-bold">pending_actions</span>
+            </div>
+          </div>
+        </section>
       </div>
 
-      {/* Summary Stats */}
-      <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-surface border border-outline-variant p-5 md:p-6 rounded-xl flex items-center justify-between group hover:border-primary transition-colors">
-          <div>
-            <p className="text-on-surface-variant text-body-sm font-semibold">Total Bonos Vendidos</p>
-            <h3 className="font-headline-lg text-headline-lg text-primary mt-1">
-              {ventas.length.toLocaleString('es-AR')}
-            </h3>
-            <p className="text-[#1a5e1a] text-xs font-bold flex items-center gap-1 mt-2">
-              <span className="material-symbols-outlined text-sm">trending_up</span>
-              Vendidos
-            </p>
-          </div>
-          <div className="w-15 h-18 flex items-center justify-center bg-primary-container/10 rounded-xl text-primary group-hover:bg-primary group-hover:text-on-primary transition-all">
-            <span style={{ fontSize: '2.1rem' }} className="material-symbols-outlined font-bold">shopping_cart</span>
-          </div>
-        </div>
-
-        <div className="bg-surface border border-outline-variant p-5 md:p-6 rounded-xl flex items-center justify-between group hover:border-primary transition-colors">
-          <div>
-            <p className="text-on-surface-variant text-body-sm font-semibold">Total Vendido</p>
-            <h3 className="font-headline-lg text-headline-lg text-primary mt-1 font-bold">
-              ${totalVendido.toLocaleString('es-AR')}
-            </h3>
-            <p className="text-primary text-xs font-bold flex items-center gap-1 mt-2">
-              <span className="material-symbols-outlined text-sm">payments</span>
-              Vendido
-            </p>
-          </div>
-          <div className="w-15 h-18 flex items-center justify-center bg-primary/20 rounded-xl text-primary group-hover:bg-secondary group-hover:text-on-secondary transition-all flex items-center">
-            <span style={{ fontSize: '2.1rem' }} className="material-symbols-outlined font-bold">sell</span>
-          </div>
-        </div>
-
-        <div className="bg-surface border border-outline-variant p-5 md:p-6 rounded-xl flex items-center justify-between group hover:border-primary transition-colors">
-          <div>
-            <p className="text-on-surface-variant text-body-sm font-semibold">Total Recaudado</p>
-            <h3 className="font-headline-lg text-headline-lg text-[#1a5e1a] mt-1 font-bold">
-              ${totalRecaudado.toLocaleString('es-AR')}
-            </h3>
-            {totalRecaudado > 0 && (
-              <div className="w-full bg-surface-variant h-1.5 rounded-full mt-3">
-                <div
-                  className="bg-[#1a5e1a] h-1.5 rounded-full transition-all"
-                  style={{ width: `${(totalRecaudado / totalVendido) * 100}%` }}
-                />
-              </div>
-            )}
-          </div>
-          <div className="w-15 h-18 flex items-center justify-center bg-[#1a5e1a]/20 rounded-xl text-[#1a5e1a] group-hover:bg-[#1a5e1a] group-hover:text-on-secondary transition-all flex items-center">
-            <span style={{ fontSize: '2.1rem' }} className="material-symbols-outlined font-bold">account_balance</span>
-          </div>
-        </div>
-
-        <div className="bg-surface border border-outline-variant p-5 md:p-6 rounded-xl flex items-center justify-between group hover:border-primary transition-colors">
-          <div>
-            <p className="text-on-surface-variant text-body-sm font-bold">Pendiente de Cobro</p>
-            <h3 className="font-headline-lg text-headline-lg text-[#93000a] mt-1 font-bold">
-              ${totalPendiente.toLocaleString('es-AR')}
-            </h3>
-            {totalRecaudado + totalPendiente > 0 && (
-              <div className="w-full bg-surface-variant h-1.5 rounded-full mt-3">
-                <div
-                  className="bg-[#93000a] h-1.5 rounded-full transition-all"
-                  style={{ width: `${(totalPendiente / (totalRecaudado + totalPendiente)) * 100}%` }}
-                />
-              </div>
-            )}
-          </div>
-          <div className="w-15 h-18 flex items-center justify-center bg-error-container/30 rounded-xl text-error group-hover:bg-error group-hover:text-on-error transition-all flex items-center">
-            <span style={{ fontSize: '2.1rem' }} className="material-symbols-outlined font-bold">pending_actions</span>
-          </div>
-        </div>
-      </section>
-
       {/* Filters Bar */}
-      <section className="bg-surface-container-low p-4 rounded-xl flex flex-wrap items-center gap-3 border border-outline-variant">
-        <div className="flex items-center gap-2 text-primary font-bold mr-2">
-          <span className="material-symbols-outlined">filter_list</span>
-          <span className="font-body-base text-body-sm hidden sm:inline">Filtros Rápidos</span>
+      <section className="bg-surface-container-low p-4 rounded-xl border border-outline-variant">
+        {/* Desktop */}
+        <div className="hidden md:flex space-y-3">
+          <div className="flex-1 flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-0">
+              <div className="flex items-center gap-2 text-primary font-bold mr-3 py-2.5 shrink-0">
+                <span className="material-symbols-outlined">filter_list</span>
+                <span className="font-body-base text-body-lg">Filtros</span>
+              </div>
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="text-primary text-body-sm font-bold cursor-pointer flex items-center gap-1 px-5 py-2 rounded-lg shrink-0 border broder-primary hover:bg-primary/10 active:scale-95 transition-all"
+                >
+                  <span className="material-symbols-outlined text-sm">close</span>
+                  Limpiar filtros
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+                placeholder="Buscar por nombre o número..."
+                className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm min-w-[160px] flex-1 focus:ring-2 focus:ring-primary/20 outline-none"
+              />
+              <select
+                value={filtroTipoPago}
+                onChange={(e) => { setFiltroTipoPago(e.target.value); setPage(1); }}
+                className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
+              >
+                <option value="">Tipo de Pago: todos</option>
+                <option value="contado">Contado</option>
+                <option value="transferencia">Transferencia</option>
+                <option value="cuotas">Cuotas</option>
+              </select>
+
+              <select
+                value={filtroVerificado}
+                onChange={(e) => { setFiltroVerificado(e.target.value); setPage(1); }}
+                className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
+              >
+                <option value="">Estado: Todos</option>
+                <option value="verificado">Verificado</option>
+                <option value="no-verificado">No verificado</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {showSuperadminClubCol ? (
+                <select
+                  value={filtroClub}
+                  onChange={(e) => { setFiltroClub(e.target.value); setPage(1); }}
+                  className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
+                >
+                  <option value="">Club: Todos</option>
+                  {clubes.map((club) => (
+                    <option key={club.id} value={club.id}>{club.nombre}</option>
+                  ))}
+                </select>
+              ) : <div />}
+
+              <div className="flex items-center gap-3">
+                {showActividadCol ? (
+                  <select
+                    value={filtroActividad}
+                    onChange={(e) => { setFiltroActividad(e.target.value); setPage(1); }}
+                    className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm outline-none focus:ring-2 focus:ring-primary/20 flex-1"
+                  >
+                    <option value="">Actividad: Todas</option>
+                    {Array.from(new Set(ventas.map(v => v.actividad).filter(Boolean))).sort().map((act) => (
+                      <option key={act} value={act!}>{(act || 'Sin actividad').charAt(0).toUpperCase() + (act || 'Sin actividad').slice(1)}</option>
+                    ))}
+                  </select>
+                ) : <div />}
+              </div>
+            </div>
+          </div>
+
+          <div className="w-px self-stretch bg-outline-variant mx-4" />
+
+          <div className="flex justify-center items-center py-4">
+            <button
+              onClick={exportCSV}
+              className="h-full cursor-pointer border border-[#1a5e1a] text-[#1a5e1a] text-body-sm font-bold flex items-center gap-1.5 px-3 py-2 rounded-lg hover:bg-[#1a5e1a]/10 active:scale-95 transition-all shrink-0"
+            >
+              <span className="material-symbols-outlined text-sm">download</span>
+              Exportar
+            </button>
+          </div>
         </div>
 
-        {showVendedorCol && (
+        {/* Mobile */}
+        <div className="md:hidden space-y-3">
+          <div className="flex items-center justify-between gap-2 text-primary font-bold">
+            <div className='flex items-center gap-2 py-1.5'>
+              <span className="material-symbols-outlined">filter_list</span>
+              <span className="font-body-base text-body-sm">Filtros</span>
+            </div>
+            {hasActiveFilters && (
+              <button
+                onClick={clearFilters}
+                className="text-primary text-body-sm font-bold flex items-center gap-1 border border-primary px-3 py-1 rounded-lg active:bg-primary/10"
+              >
+                <span className="material-symbols-outlined text-sm">close</span>
+                Limpiar filtros
+              </button>
+            )}
+          </div>
+
           <input
             type="text"
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             placeholder="Buscar por nombre o número..."
-            className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm min-w-[160px] flex-1 focus:ring-2 focus:ring-primary/20 outline-none"
+            className="w-full bg-surface border border-outline-variant rounded-lg px-4 py-2.5 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
           />
-        )}
-        {!showVendedorCol && (
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            placeholder="Buscar por nombre o número..."
-            className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm min-w-[160px] flex-1 focus:ring-2 focus:ring-primary/20 outline-none"
-          />
-        )}
 
-        <select
-          value={filtroTipoPago}
-          onChange={(e) => { setFiltroTipoPago(e.target.value); setPage(1); }}
-          className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
-        >
-          <option value="">Tipo de Pago: todos</option>
-          <option value="contado">Contado</option>
-          <option value="transferencia">Transferencia</option>
-          <option value="cuotas">Cuotas</option>
-        </select>
-
-        <select
-          value={filtroVerificado}
-          onChange={(e) => { setFiltroVerificado(e.target.value); setPage(1); }}
-          className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
-        >
-          <option value="">Estado: Todos</option>
-          <option value="verificado">Verificado</option>
-          <option value="no-verificado">No verificado</option>
-        </select>
-
-        {showSuperadminClubCol && (
           <select
-            value={filtroClub}
-            onChange={(e) => { setFiltroClub(e.target.value); setPage(1); }}
-            className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
+            value={filtroTipoPago}
+            onChange={(e) => { setFiltroTipoPago(e.target.value); setPage(1); }}
+            className="w-full bg-surface border border-outline-variant rounded-lg px-4 py-2.5 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
           >
-            <option value="">Todos los clubes</option>
-            {clubes.map((club) => (
-              <option key={club.id} value={club.id}>{club.nombre}</option>
-            ))}
+            <option value="">Tipo de Pago: todos</option>
+            <option value="contado">Contado</option>
+            <option value="transferencia">Transferencia</option>
+            <option value="cuotas">Cuotas</option>
           </select>
-        )}
 
-        {showActividadCol && (
           <select
-            value={filtroActividad}
-            onChange={(e) => { setFiltroActividad(e.target.value); setPage(1); }}
-            className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
+            value={filtroVerificado}
+            onChange={(e) => { setFiltroVerificado(e.target.value); setPage(1); }}
+            className="w-full bg-surface border border-outline-variant rounded-lg px-4 py-2.5 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
           >
-            <option value="">Actividad: Todas</option>
-            {Array.from(new Set(ventas.map(v => v.actividad).filter(Boolean))).sort().map((act) => (
-              <option key={act} value={act!}>{(act || 'Sin actividad').charAt(0).toUpperCase() + (act || 'Sin actividad').slice(1)}</option>
-            ))}
+            <option value="">Estado: Todos</option>
+            <option value="verificado">Verificado</option>
+            <option value="no-verificado">No verificado</option>
           </select>
-        )}
 
-        {hasActiveFilters && (
+          {showSuperadminClubCol && (
+            <select
+              value={filtroClub}
+              onChange={(e) => { setFiltroClub(e.target.value); setPage(1); }}
+              className="w-full bg-surface border border-outline-variant rounded-lg px-4 py-2.5 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
+            >
+              <option value="">Todos los clubes</option>
+              {clubes.map((club) => (
+                <option key={club.id} value={club.id}>{club.nombre}</option>
+              ))}
+            </select>
+          )}
+
+          {showActividadCol && (
+            <select
+              value={filtroActividad}
+              onChange={(e) => { setFiltroActividad(e.target.value); setPage(1); }}
+              className="w-full bg-surface border border-outline-variant rounded-lg px-4 py-2.5 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
+            >
+              <option value="">Actividad: Todas</option>
+              {Array.from(new Set(ventas.map(v => v.actividad).filter(Boolean))).sort().map((act) => (
+                <option key={act} value={act!}>{(act || 'Sin actividad').charAt(0).toUpperCase() + (act || 'Sin actividad').slice(1)}</option>
+              ))}
+            </select>
+          )}
+
+          <div className="border-t border-outline-variant" />
+
           <button
-            onClick={clearFilters}
-            className="ml-auto text-primary text-body-sm font-bold flex items-center gap-1 hover:underline"
+            onClick={exportCSV}
+            className="w-full border border-[#1a5e1a] text-[#1a5e1a] text-body-sm font-bold flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg hover:bg-[#1a5e1a]/10 active:scale-[0.98] transition-all"
           >
-            <span className="material-symbols-outlined text-sm">close</span>
-            Limpiar filtros
+            <span className="material-symbols-outlined text-sm">download</span>
+            Exportar
           </button>
-        )}
+        </div>
       </section>
 
       {/* Data Table — desktop */}
@@ -446,15 +654,78 @@ export default function VentasListado({
                         #{formatPair(venta.numero)}
                       </td>
                       <td className="p-[0.75rem_1rem]">
-                        <p className="font-body-base text-body-sm font-bold text-on-surface">{venta.compradorNombre}</p>
+                        {canEditComprador && editingCompradorId === venta.id ? (
+                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              value={editNombre}
+                              onChange={(e) => setEditNombre(e.target.value)}
+                              placeholder="Nombre"
+                              className="w-24 bg-surface border border-primary rounded px-2 py-1 text-xs font-bold outline-none"
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleCambiarComprador(venta); if (e.key === 'Escape') setEditingCompradorId(null); }}
+                              autoFocus
+                            />
+                            <input
+                              value={editApellido}
+                              onChange={(e) => setEditApellido(e.target.value)}
+                              placeholder="Apellido"
+                              className="w-28 bg-surface border border-primary rounded px-2 py-1 text-xs font-bold outline-none"
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleCambiarComprador(venta); if (e.key === 'Escape') setEditingCompradorId(null); }}
+                            />
+                            <button
+                              onClick={() => handleCambiarComprador(venta)}
+                              className="flex justify-center items-center ml-0.5 p-0.5 rounded text-[#1a5e1a] hover:bg-[#B9E6B5]/30 transition-colors"
+                            >
+                              <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>check</span>
+                            </button>
+                            <button
+                              onClick={() => setEditingCompradorId(null)}
+                              className="flex justify-center items-center p-0.5 rounded text-[#93000a] hover:bg-[#F1A7A7]/30 transition-colors"
+                            >
+                              <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>close</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <span
+                            onClick={(e) => { if (canEditComprador) { e.stopPropagation(); startEditComprador(venta); } }}
+                            className={`inline-flex items-center gap-1.5 font-body-base text-body-sm font-bold text-on-surface ${canEditComprador ? 'cursor-pointer hover:text-primary' : ''}`}
+                          >
+                            {venta.compradorNombre}
+                            {canEditComprador && (
+                              <span className="material-symbols-outlined text-sm text-outline">edit</span>
+                            )}
+                          </span>
+                        )}
                       </td>
                       {showVendedorCol && (
                         <td className="p-[0.75rem_1rem] text-body-sm text-on-surface-variant">
                           {venta.vendedorNombre || '—'}
                         </td>
                       )}
-                      <td className="p-[0.75rem_1rem] font-label-data text-label-data text-on-surface">
-                        {venta.tipoPago === 'contado' ? 'Contado' : venta.tipoPago === 'transferencia' ? 'Transferencia' : `${venta.bono?.cantidadCuotas} Cuotas`}
+                      <td className="p-[0.75rem_1rem]">
+                        {canEditTipoPago && editingTipoPagoId === venta.id ? (
+                          <select
+                            value={venta.tipoPago}
+                            onChange={(e) => handleCambiarTipoPago(venta, e.target.value)}
+                            onBlur={() => setEditingTipoPagoId(null)}
+                            autoFocus
+                            className="bg-surface border border-primary rounded px-2 py-1 text-[11px] font-bold uppercase tracking-wider outline-none"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <option value="contado">Contado</option>
+                            <option value="transferencia">Transferencia</option>
+                            <option value="cuotas">Cuotas</option>
+                          </select>
+                        ) : (
+                          <span
+                            onClick={(e) => { if (canEditTipoPago) { e.stopPropagation(); setEditingTipoPagoId(venta.id); } }}
+                            className={`inline-flex items-center gap-1.5 font-label-data text-label-data text-on-surface ${canEditTipoPago ? 'cursor-pointer hover:text-primary' : ''}`}
+                          >
+                            {venta.tipoPago === 'contado' ? 'Contado' : venta.tipoPago === 'transferencia' ? 'Transferencia' : `${venta.bono?.cantidadCuotas} Cuotas`}
+                            {canEditTipoPago && (
+                              <span className="material-symbols-outlined text-sm text-outline">edit</span>
+                            )}
+                          </span>
+                        )}
                       </td>
                       {showActividadCol && (
                         <td className="p-[0.75rem_1rem] text-body-sm text-on-surface-variant capitalize">
@@ -656,7 +927,47 @@ export default function VentasListado({
 
                   <div className="flex flex-col">
                     <span className="font-label-data text-label-data text-on-surface-variant">Comprador/a:</span>
-                    <span className="font-body-base text-body-sm font-bold text-on-surface truncate">{venta.compradorNombre}</span>
+                    {canEditComprador && editingCompradorId === venta.id ? (
+                      <div className="flex items-center gap-1 mt-0.5" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          value={editNombre}
+                          onChange={(e) => setEditNombre(e.target.value)}
+                          placeholder="Nombre"
+                          className="w-20 bg-surface border border-primary rounded px-2 py-1 text-xs font-bold outline-none"
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleCambiarComprador(venta); if (e.key === 'Escape') setEditingCompradorId(null); }}
+                          autoFocus
+                        />
+                        <input
+                          value={editApellido}
+                          onChange={(e) => setEditApellido(e.target.value)}
+                          placeholder="Apellido"
+                          className="w-24 bg-surface border border-primary rounded px-2 py-1 text-xs font-bold outline-none"
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleCambiarComprador(venta); if (e.key === 'Escape') setEditingCompradorId(null); }}
+                        />
+                        <button
+                          onClick={() => handleCambiarComprador(venta)}
+                          className="ml-0.5 p-1 rounded text-[#1a5e1a] hover:bg-[#B9E6B5]/30 transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>check</span>
+                        </button>
+                        <button
+                          onClick={() => setEditingCompradorId(null)}
+                          className="p-1 rounded text-[#93000a] hover:bg-[#F1A7A7]/30 transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>close</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <span
+                        onClick={(e) => { if (canEditComprador) { e.stopPropagation(); startEditComprador(venta); } }}
+                        className={`font-body-base text-body-sm font-bold text-on-surface truncate inline-flex items-center gap-1 ${canEditComprador ? 'cursor-pointer hover:text-primary' : ''}`}
+                      >
+                        {venta.compradorNombre}
+                        {canEditComprador && (
+                          <span className="material-symbols-outlined text-sm text-outline">edit</span>
+                        )}
+                      </span>
+                    )}
                   </div>
 
                   {showVendedorCol && venta.vendedorNombre && (
@@ -677,9 +988,30 @@ export default function VentasListado({
 
                   <div className="flex flex-col">
                     <span className="font-label-data text-label-data text-on-surface-variant">Tipo Pago:</span>
-                    <span className="font-body-base text-body-sm font-bold text-on-surface truncate">
-                      {venta.tipoPago === 'contado' ? 'Contado' : venta.tipoPago === 'transferencia' ? 'Transferencia' : `${venta.bono?.cantidadCuotas} Cuotas`}
-                    </span>
+                    {canEditTipoPago && editingTipoPagoId === venta.id ? (
+                      <select
+                        value={venta.tipoPago}
+                        onChange={(e) => handleCambiarTipoPago(venta, e.target.value)}
+                        onBlur={() => setEditingTipoPagoId(null)}
+                        autoFocus
+                        className="bg-surface border border-primary rounded px-2 py-1 text-[11px] font-bold uppercase tracking-wider outline-none mt-0.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <option value="contado">Contado</option>
+                        <option value="transferencia">Transferencia</option>
+                        <option value="cuotas">Cuotas</option>
+                      </select>
+                    ) : (
+                      <span
+                        onClick={(e) => { if (canEditTipoPago) { e.stopPropagation(); setEditingTipoPagoId(venta.id); } }}
+                        className={`font-body-base text-body-sm font-bold text-on-surface truncate inline-flex items-center gap-1 ${canEditTipoPago ? 'cursor-pointer hover:text-primary' : ''}`}
+                      >
+                        {venta.tipoPago === 'contado' ? 'Contado' : venta.tipoPago === 'transferencia' ? 'Transferencia' : `${venta.bono?.cantidadCuotas} Cuotas`}
+                        {canEditTipoPago && (
+                          <span className="material-symbols-outlined text-sm text-outline">edit</span>
+                        )}
+                      </span>
+                    )}
                   </div>
 
                   {showSuperadminClubCol && (

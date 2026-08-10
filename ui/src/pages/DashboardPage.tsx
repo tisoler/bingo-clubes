@@ -82,6 +82,7 @@ export default function DashboardPage() {
       clubes={clubes}
       showVendedorCol
       showActividadCol
+      showVendedorFilter
       canToggle={user?.rol !== 'vendedor'}
       canEditTipoPago={user?.rol !== 'vendedor'}
       canEditComprador={user?.rol !== 'vendedor'}

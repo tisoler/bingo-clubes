@@ -61,6 +61,7 @@ interface VentasListadoProps {
   canEditComprador?: boolean;
   titleExtra?: React.ReactNode;
   clubFilter?: number[];
+  showVendedorFilter?: boolean;
 }
 
 export default function VentasListado({
@@ -77,8 +78,10 @@ export default function VentasListado({
   canEditComprador = false,
   titleExtra,
   clubFilter,
+  showVendedorFilter = false,
 }: VentasListadoProps) {
   const [search, setSearch] = useState('');
+  const [filtroVendedor, setFiltroVendedor] = useState('');
   const [filtroTipoPago, setFiltroTipoPago] = useState('');
   const [filtroVerificado, setFiltroVerificado] = useState('');
   const [filtroClub, setFiltroClub] = useState('');
@@ -194,15 +197,32 @@ export default function VentasListado({
     return clubes.find(c => c.id === clubId)?.nombre || `Club #${clubId}`;
   };
 
+  const vendedoresOptions = useMemo(() => {
+    const source = filtroClub
+      ? ventas.filter(v => v.clubId === Number(filtroClub))
+      : ventas;
+    const byUid = new Map<string, { uid: string; nombre: string }>();
+    source.forEach(v => {
+      if (v.vendedorUid && !byUid.has(v.vendedorUid)) {
+        byUid.set(v.vendedorUid, { uid: v.vendedorUid, nombre: v.vendedorNombre || '' });
+      }
+    });
+    return Array.from(byUid.values()).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  }, [ventas, filtroClub]);
+
+  useEffect(() => {
+    setFiltroVendedor('');
+  }, [filtroClub]);
+
   const ventasFiltradas = useMemo(() => {
     return ventas.filter(v => {
       if (search) {
         const q = search.toLowerCase();
         const matchNombre = v.compradorNombre.toLowerCase().includes(q);
         const matchNumero = String(v.numero).includes(q) || String(v.numero + 500).includes(q);
-        const matchVendedor = showVendedorCol ? v.vendedorNombre?.toLowerCase().includes(q) : false;
-        if (!matchNombre && !matchNumero && !matchVendedor) return false;
+        if (!matchNombre && !matchNumero) return false;
       }
+      if (filtroVendedor && v.vendedorUid !== filtroVendedor) return false;
       if (filtroTipoPago && v.tipoPago !== filtroTipoPago) return false;
       if (filtroVerificado === 'verificado' && !getVerificado(v)) return false;
       if (filtroVerificado === 'no-verificado' && getVerificado(v)) return false;
@@ -210,7 +230,7 @@ export default function VentasListado({
       if (filtroActividad && (v.actividad || '') !== filtroActividad) return false;
       return true;
     });
-  }, [ventas, search, filtroTipoPago, filtroVerificado, filtroClub, filtroActividad, showSuperadminClubCol, showVendedorCol, showActividadCol]);
+  }, [ventas, search, filtroVendedor, filtroTipoPago, filtroVerificado, filtroClub, filtroActividad, showSuperadminClubCol, showActividadCol]);
 
   const totalPages = Math.max(1, Math.ceil(ventasFiltradas.length / ITEMS_PER_PAGE));
   const paginatedVentas = ventasFiltradas.slice(
@@ -267,6 +287,7 @@ export default function VentasListado({
 
   const clearFilters = () => {
     setSearch('');
+    setFiltroVendedor('');
     setFiltroTipoPago('');
     setFiltroVerificado('');
     setFiltroClub('');
@@ -274,7 +295,7 @@ export default function VentasListado({
     setPage(1);
   };
 
-  const hasActiveFilters = search || filtroTipoPago || filtroVerificado || filtroClub || filtroActividad;
+  const hasActiveFilters = search || filtroVendedor || filtroTipoPago || filtroVerificado || filtroClub || filtroActividad;
 
   const exportCSV = () => {
     const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
@@ -443,14 +464,26 @@ export default function VentasListado({
               )}
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className={showVendedorFilter ? 'grid grid-cols-4 gap-3' : 'grid grid-cols-3 gap-3'}>
               <input
                 type="text"
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-                placeholder="Buscar por nombre o número..."
+                placeholder="Buscar comprador o número..."
                 className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm min-w-[160px] flex-1 focus:ring-2 focus:ring-primary/20 outline-none"
               />
+              {showVendedorFilter && (
+                <select
+                  value={filtroVendedor}
+                  onChange={(e) => { setFiltroVendedor(e.target.value); setPage(1); }}
+                  className="bg-surface border border-outline-variant rounded-lg px-4 py-2 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
+                >
+                  <option value="">Vendedor/a: todos</option>
+                  {vendedoresOptions.map(v => (
+                    <option key={v.uid} value={v.uid}>{v.nombre || v.uid}</option>
+                  ))}
+                </select>
+              )}
               <select
                 value={filtroTipoPago}
                 onChange={(e) => { setFiltroTipoPago(e.target.value); setPage(1); }}
@@ -539,9 +572,22 @@ export default function VentasListado({
             type="text"
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            placeholder="Buscar por nombre o número..."
+            placeholder="Buscar comprador o número..."
             className="w-full bg-surface border border-outline-variant rounded-lg px-4 py-2.5 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
           />
+
+          {showVendedorFilter && (
+            <select
+              value={filtroVendedor}
+              onChange={(e) => { setFiltroVendedor(e.target.value); setPage(1); }}
+              className="w-full bg-surface border border-outline-variant rounded-lg px-4 py-2.5 text-body-sm outline-none focus:ring-2 focus:ring-primary/20"
+            >
+              <option value="">Vendedor/a: todos</option>
+              {vendedoresOptions.map(v => (
+                <option key={v.uid} value={v.uid}>{v.nombre || v.uid}</option>
+              ))}
+            </select>
+          )}
 
           <select
             value={filtroTipoPago}

@@ -13,5 +13,4 @@ dist-ssr
 *.sw?
 .env
 .env.local
-Dockerfile
 docker-compose.yml
